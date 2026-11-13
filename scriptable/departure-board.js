@@ -129,6 +129,17 @@ const DEFAULT_STATION = "Zürich HB";
 const AMBER = "#f7b500";
 const API = "https://transport.opendata.ch/v1";
 
+// Show trains only (S-Bahn, regional, IR/IC/EC, ...): no trams, buses,
+// boats or cable cars. Set to false to show every departure again.
+const TRAINS_ONLY = true;
+
+// Categories that are not trains, in case the API's own filter lets one
+// through (EV = rail replacement bus).
+const NOT_TRAIN = new Set([
+  "T", "TRAM", "B", "BUS", "NFB", "NFT", "NFO", "TRO", "M", "EV", "EXB",
+  "BAT", "BAV", "FAE", "SCH", "KB", "FUN", "PB", "GB", "SL", "ASC", "CC",
+]);
+
 // Widget sizes in points (typical iPhone). The drawing is scaled to fill.
 const SIZES = {
   small: [170, 170],
@@ -140,7 +151,7 @@ const SIZES = {
 // Column widths in dots — the same layout as the mirror's board.
 const CELL = 12; // dots per text line
 const PITCH = 17; // dots per board line
-const LABEL_W = 26;
+const LABEL_W = 30; // room for "RE48", "IR36"
 const GAP_W = 8;
 const TIME_W = 22;
 const MARGIN_W = 2;
@@ -275,8 +286,14 @@ function departureTime(stop) {
 async function loadDepartures(id, limit) {
   // No `fields[]` filter: on the stationboard it can drop the nested `stop`
   // data, which leaves every departure without a time ("No departures").
-  const j = await getJSON(`${API}/stationboard?id=${encodeURIComponent(id)}&limit=${limit + 6}`);
-  const raw = j.stationboard || [];
+  // Ask for extra entries: some are dropped below.
+  const only = TRAINS_ONLY ? "&transportations%5B%5D=train" : "";
+  const j = await getJSON(
+    `${API}/stationboard?id=${encodeURIComponent(id)}&limit=${limit + 10}${only}`
+  );
+  const raw = (j.stationboard || []).filter(
+    (e) => !TRAINS_ONLY || (e && !NOT_TRAIN.has(String(e.category || "").trim().toUpperCase()))
+  );
   const departures = [];
   for (const e of raw) {
     if (!e || !e.stop) continue;
@@ -317,14 +334,14 @@ function writeCache(cache) {
  * message when something went wrong. Falls back to the cache offline. */
 async function getBoard(param, maxRows) {
   const cache = readCache();
-  const key = norm(param);
+  const key = (TRAINS_ONLY ? "trains:" : "") + norm(param);
   try {
     const station = await resolveStation(param);
     if (!station) return { name: param, rows: [], message: "Station not found" };
     const data = await loadDepartures(station.id, maxRows);
     const name = station.name || data.name || param;
     const message =
-      data.rawCount === 0 ? "No departures" : data.departures.length === 0 ? "No times in data" : null;
+      data.rawCount === 0 ? (TRAINS_ONLY ? "No trains" : "No departures") : data.departures.length === 0 ? "No times in data" : null;
     if (data.departures.length) {
       cache[key] = { name, departures: data.departures, fetchedAt: Date.now() };
       writeCache(cache);
